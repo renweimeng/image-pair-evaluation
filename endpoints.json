@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_utc": "2026-08-29T14:10:05Z",
+  "updated_utc": "2026-08-29T14:10:08Z",
   "endpoints": [
     {"role": "primary", "url": "https://september-prevention-casio-gallery.trycloudflare.com"},
-    {"role": "secondary", "url": ""}
+    {"role": "secondary", "url": "https://classics-andrea-accept-fin.trycloudflare.com"}
   ]
 }
