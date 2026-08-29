@@ -13,6 +13,8 @@
     h1 { margin: 0 0 10px; font-size: 24px; }
     p { margin: 0; color: #5a6b83; line-height: 1.65; }
     a { color: #245bc5; }
+    button { margin-top: 18px; border: 0; border-radius: 10px; padding: 11px 18px; background: #245bc5; color: #fff; font-size: 15px; cursor: pointer; }
+    .hidden { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -21,32 +23,109 @@
     <div class="spinner" aria-hidden="true"></div>
     <h1>正在连接匿名图像评价系统</h1>
     <p id="status">请稍候，页面将自动进入。</p>
+    <button id="retry" class="hidden" type="button">重新检测</button>
   </main>
   <script>
     (() => {
       const status = document.getElementById("status");
-      const endpoint = "https://raw.githubusercontent.com/renweimeng/image-pair-evaluation/main/current_url.txt?t=" + Date.now();
-      fetch(endpoint, { cache: "no-store" })
-        .then((response) => {
-          if (!response.ok) throw new Error("入口信息暂不可用");
-          return response.text();
-        })
-        .then((text) => {
-          const target = text.trim();
-          const parsed = new URL(target);
-          if (parsed.protocol !== "https:" || !parsed.hostname.endsWith(".trycloudflare.com")) {
-            throw new Error("入口地址校验失败");
+      const spinner = document.querySelector(".spinner");
+      const retry = document.getElementById("retry");
+      const repository = "https://raw.githubusercontent.com/renweimeng/image-pair-evaluation/main/";
+      const sleep = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+      function validEndpoint(value) {
+        try {
+          const parsed = new URL(String(value || "").trim());
+          return parsed.protocol === "https:" && parsed.hostname.endsWith(".trycloudflare.com")
+            ? parsed.origin
+            : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      async function loadEndpoints() {
+        try {
+          const response = await fetch(`${repository}endpoints.json?t=${Date.now()}`, {cache: "no-store"});
+          if (!response.ok) throw new Error("manifest unavailable");
+          const manifest = await response.json();
+          const values = (manifest.endpoints || []).map((item) => validEndpoint(item.url)).filter(Boolean);
+          if (values.length) return [...new Set(values)];
+        } catch (_) {}
+
+        const fallback = await fetch(`${repository}current_url.txt?t=${Date.now()}`, {cache: "no-store"});
+        if (!fallback.ok) return [];
+        const value = validEndpoint(await fallback.text());
+        return value ? [value] : [];
+      }
+
+      async function probe(target) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetch(`${target}/healthz?gateway_probe=${Date.now()}`, {
+            cache: "no-store",
+            credentials: "omit",
+            mode: "cors",
+            signal: controller.signal,
+          });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          return payload.ok === true;
+        } catch (_) {
+          return false;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+
+      async function firstHealthy(endpoints) {
+        return new Promise((resolve) => {
+          if (!endpoints.length) {
+            resolve(null);
+            return;
           }
-          const adminMode = new URLSearchParams(window.location.search).get("admin") === "1";
-          parsed.pathname = adminMode ? "/admin" : "/";
-          parsed.search = "";
-          parsed.hash = "";
-          window.location.replace(parsed.href);
-        })
-        .catch(() => {
-          status.innerHTML = "连接入口暂时更新中，请稍后刷新本页。";
-          document.querySelector(".spinner").style.display = "none";
+          let remaining = endpoints.length;
+          let settled = false;
+          endpoints.forEach(async (target) => {
+            const healthy = await probe(target);
+            if (healthy && !settled) {
+              settled = true;
+              resolve(target);
+              return;
+            }
+            remaining -= 1;
+            if (!remaining && !settled) resolve(null);
+          });
         });
+      }
+
+      async function connect() {
+        retry.classList.add("hidden");
+        spinner.style.display = "block";
+        for (let attempt = 1; attempt <= 8; attempt += 1) {
+          status.textContent = attempt === 1
+            ? "正在检测可用线路，请稍候。"
+            : `线路正在自动恢复，已进行第 ${attempt} 次检测…`;
+          try {
+            const target = await firstHealthy(await loadEndpoints());
+            if (target) {
+              const parsed = new URL(target);
+              const adminMode = new URLSearchParams(window.location.search).get("admin") === "1";
+              parsed.pathname = adminMode ? "/admin" : "/";
+              window.location.replace(parsed.href);
+              return;
+            }
+          } catch (_) {}
+          await sleep(2500);
+        }
+        spinner.style.display = "none";
+        status.textContent = "两条线路都在恢复中。请稍后点击“重新检测”，已经提交的结果不会丢失。";
+        retry.classList.remove("hidden");
+      }
+
+      retry.addEventListener("click", connect);
+      connect();
     })();
   </script>
 </body>
